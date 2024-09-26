@@ -1,47 +1,54 @@
-from transformers import pipeline, MllamaForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+from transformers import pipeline, MllamaForConditionalGeneration, AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig
 import torch
 from PIL import Image
 
-# model = pipeline(
-#     "text-generation",
-#     model="models/textmodel",
-#     torch_dtype=torch.bfloat16,
-#     device_map="auto",
-# )
-# 
-# messages = [
-#     {"role": "user", "content": "Hi"},
-# ]
-# outputs = model(
-#     messages,
-#     max_new_tokens=65536,
-# )
-# response = outputs[0]["generated_text"][-1]["content"]
-# print(response)
+MODELPATH = "models/imagemodel"
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16
+model = AutoModelForCausalLM.from_pretrained(
+    MODELPATH,
+    device_map="cuda", 
+    trust_remote_code=True, 
+    torch_dtype="auto", 
+    _attn_implementation='flash_attention_2'    
+)
+processor = AutoProcessor.from_pretrained(
+    MODELPATH,
+    trust_remote_code=True, 
+    num_crops=16,
 )
 
-model = MllamaForConditionalGeneration.from_pretrained(
-    "models/imagemodel",
-    quantization_config=bnb_config,
-)
-processor = AutoProcessor.from_pretrained("models/imagemodel")
+images = [Image.new("RGB", (100, 100))]
+imgtxt = "<|image_1|>\n"
 
 messages = [
-    {"role": "user", "content": [
-        {"type": "image"},
-        {"type": "text", "text": "Hi"}
-    ]}
+    {"role": "user", "content": imgtxt + "Hi"},
 ]
 
-input_text = processor.apply_chat_template(
-    messages,
-    add_generation_prompt=True,
+prompt = processor.tokenizer.apply_chat_template(
+    messages, 
+    tokenize=False, 
+    add_generation_prompt=True
 )
-inputs = processor(Image.new("RGB", (100, 100)), input_text, return_tensors="pt").to(model.device)
-output = model.generate(**inputs, max_new_tokens=65536)
-print(processor.decode(output[0][inputs["input_ids"].shape[-1]:]))
+
+inputs = processor(prompt, images, return_tensors="pt").to("cuda:0") 
+
+generation_args = { 
+    "max_new_tokens": 32767, 
+    "temperature": 0.0, 
+    "do_sample": False, 
+} 
+
+generate_ids = model.generate(
+    **inputs, 
+    eos_token_id=processor.tokenizer.eos_token_id, 
+    **generation_args
+)
+
+# remove input tokens 
+generate_ids = generate_ids[:, inputs['input_ids'].shape[1]:]
+response = processor.batch_decode(
+    generate_ids, 
+    skip_special_tokens=True, 
+    clean_up_tokenization_spaces=False)[0] 
+
+print(response)
