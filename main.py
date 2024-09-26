@@ -1,29 +1,19 @@
-import os
-from dotenv import load_dotenv
-load_dotenv()
-
-HUGGINGFACE_TOKEN = os.getenv('HUGGINGFACE_TOKEN')
-
-from huggingface_hub import login
-login(token=HUGGINGFACE_TOKEN)
-
-from transformers import pipeline
+from transformers import pipeline, BitsAndBytesConfig
 import torch
 
-model_id = "meta-llama/Llama-3.2-3B-Instruct"
-pipe = pipeline(
+model = pipeline(
     "text-generation",
-    model=model_id,
+    model="models/Llama-3.2-3B-Instruct",
     torch_dtype=torch.bfloat16,
     device_map="auto",
 )
 
 messages = [
-    {"role": "user", "content": "Who are you? Please, answer in pirate-speak."},
+    {"role": "user", "content": "Hi"},
 ]
-outputs = pipe(
+outputs = model(
     messages,
-    max_new_tokens=256,
+    max_new_tokens=65536
 )
 response = outputs[0]["generated_text"][-1]["content"]
 print(response)
