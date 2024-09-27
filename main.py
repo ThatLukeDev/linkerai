@@ -1,54 +1,65 @@
-from transformers import pipeline, MllamaForConditionalGeneration, AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig
-import torch
-from PIL import Image
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import json
 
-MODELPATH = "models/imagemodel"
+MODELPATH = "models/textmodel"
 
-model = AutoModelForCausalLM.from_pretrained(
-    MODELPATH,
-    device_map="cuda", 
-    trust_remote_code=True, 
-    torch_dtype="auto", 
-    _attn_implementation='flash_attention_2'    
-)
-processor = AutoProcessor.from_pretrained(
-    MODELPATH,
-    trust_remote_code=True, 
-    num_crops=16,
-)
-
-images = [Image.new("RGB", (100, 100))]
-imgtxt = "<|image_1|>\n"
-
-messages = [
-    {"role": "user", "content": imgtxt + "Hi"},
+FUNCTIONS = [
+    {
+        "name": "web_get",
+        "description": "Retrieve information from a webpage from the wget command line tool.",
+        "parameters": {
+            "type": "dict",
+            "required": [
+                "user_id"
+            ],
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The url that will be fetched from."
+                }
+            },
+        }
+    },
 ]
 
-prompt = processor.tokenizer.apply_chat_template(
-    messages, 
-    tokenize=False, 
-    add_generation_prompt=True
-)
+USERHEADER = "<|start_header_id|>user<|end_header_id|>"
+ASSISTANTHEADER = "<|start_header_id|>assistant<|end_header_id|>"
+SYSTEMHEADER = "<|start_header_id|>system<|end_header_id|>"
+ENDTOKEN = "<|eot_id|>"
+CALLTOKEN = "<|call|>"
 
-inputs = processor(prompt, images, return_tensors="pt").to("cuda:0") 
+SYSTEMPROMPT = """
+Cutting Knowledge Date: December 2023
 
-generation_args = { 
-    "max_new_tokens": 32767, 
-    "temperature": 0.0, 
-    "do_sample": False, 
-} 
+When you receive a tool call response, use the output to format an answer to the orginal user question.
+You are a helpful assistant with tool calling capabilities.
+You should not always call a tool.
 
-generate_ids = model.generate(
-    **inputs, 
-    eos_token_id=processor.tokenizer.eos_token_id, 
-    **generation_args
-)
+If you decide to call a tool, respond in the format:
+<|call|>{"name": function name, "parameters": dictionary of argument name and its value}
+Do not use variables.
+Here is a list of functions in JSON format that you can invoke.
+""" + json.dumps(FUNCTIONS, indent=4)
 
-# remove input tokens 
-generate_ids = generate_ids[:, inputs['input_ids'].shape[1]:]
-response = processor.batch_decode(
-    generate_ids, 
-    skip_special_tokens=True, 
-    clean_up_tokenization_spaces=False)[0] 
+model = AutoModelForCausalLM.from_pretrained(MODELPATH, load_in_4bit=True, device_map="auto")
+tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
 
-print(response)
+chat = SYSTEMHEADER + SYSTEMPROMPT + ENDTOKEN
+
+def gen():
+    global chat
+    chat += ASSISTANTHEADER
+    input_ids = tokenizer.encode(chat, return_tensors="pt")
+    output = model.generate(input_ids, max_length=1024, num_return_sequences=1)
+    chat = tokenizer.decode(output[0])
+
+def prompt(text):
+    global chat
+    chat += USERHEADER + text + ENDTOKEN
+    gen()
+    response = chat.split(ASSISTANTHEADER)[-1].replace(ENDTOKEN, "")
+
+    return response
+
+while True:
+    print(prompt(input()))
