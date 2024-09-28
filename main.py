@@ -3,6 +3,14 @@ import json
 
 MODELPATH = "models/textmodel"
 
+import requests
+def web_get(params):
+    return requests.get(params["url"]).text
+
+FUNCLIST = {
+    "web_get": web_get,
+}
+
 FUNCTIONS = [
     {
         "name": "web_get",
@@ -10,7 +18,7 @@ FUNCTIONS = [
         "parameters": {
             "type": "dict",
             "required": [
-                "user_id"
+                "url"
             ],
             "properties": {
                 "url": {
@@ -38,6 +46,8 @@ You should not always call a tool.
 If you decide to call a tool, respond in the format:
 <|call|>{"name": function name, "parameters": dictionary of argument name and its value}
 Do not use variables.
+If you decide to call a tool, the output will be returned to you then you will be given the opportunity to write your answer.
+You must use the <|call|> tag to call a tool.
 Here is a list of functions in JSON format that you can invoke.
 """ + json.dumps(FUNCTIONS, indent=4)
 
@@ -50,16 +60,19 @@ def gen():
     global chat
     chat += ASSISTANTHEADER
     input_ids = tokenizer.encode(chat, return_tensors="pt")
-    output = model.generate(input_ids, max_length=1024, num_return_sequences=1)
+    output = model.generate(input_ids, max_length=65535, num_return_sequences=1)
     chat = tokenizer.decode(output[0])
+    response = chat.split(ASSISTANTHEADER)[-1].replace(ENDTOKEN, "")
+    if CALLTOKEN in response:
+        dump = json.loads(response.split(CALLTOKEN)[-1])
+        chat += FUNCLIST[dump["name"]](dump["parameters"])
+        return gen()
+    return response
 
 def prompt(text):
     global chat
     chat += USERHEADER + text + ENDTOKEN
-    gen()
-    response = chat.split(ASSISTANTHEADER)[-1].replace(ENDTOKEN, "")
-
-    return response
+    return gen()
 
 while True:
     print(prompt(input()))
